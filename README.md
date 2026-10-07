@@ -2,6 +2,10 @@
 
 An original two-player browser arena with a Node.js authoritative WebSocket server. Original SVG character artwork; no Riot assets or APIs.
 
+Play: https://smiteshowdown.onrender.com
+
+Source: https://github.com/dwmiquella/smiteshowdown
+
 ## Run
 
 Node.js 22 or newer:
@@ -18,7 +22,7 @@ Open http://localhost:3000 for local development. To test locally on another dev
 
 Use one Node web service and one instance. Standalone repository: build `npm ci --omit=dev`, start `npm start`, health check `/health`. `render.yaml` supplies the equivalent free-plan Blueprint. No secrets are required.
 
-The intended source repository is `dwmiquella/smiteshowdown`, with these files at the repository root. Use build `npm ci --omit=dev` and start `npm start`.
+The source repository is `dwmiquella/smiteshowdown`, with these files at the repository root. Use build `npm ci --omit=dev` and start `npm start`.
 
 Render provides HTTPS and WebSocket upgrades on the service URL. Share that URL, create a room, and send the invitation to the second player. Hosting may cold-start after idle periods on the free plan. Rooms live in process memory: restarts or redeployments clear them. This is a single-instance prototype; do not horizontally scale without a room routing/state design. Rooms expire after two hours, including occupied rooms. This is stated in the tutorial.
 
