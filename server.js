@@ -9,7 +9,7 @@ export function createServer(){
  const server=http.createServer(async(req,res)=>{
   const path=new URL(req.url,'http://localhost').pathname;
   if(path==='/health'){res.writeHead(200,{'Content-Type':'application/json'});res.end('{"ok":true}');return;}
-  const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/monster.svg':'monster.svg'};
+  const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/monster.svg':'monster.svg','/thorn.svg':'thorn.svg','/manta.svg':'manta.svg'};
   if(!files[path]){res.writeHead(404);res.end('Not found');return;}
   try {const body=await readFile(new URL(`./public/${files[path]}`,import.meta.url));res.writeHead(200,{'Content-Type':path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':path.endsWith('.svg')?'image/svg+xml':'text/html; charset=utf-8','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(body);}catch{res.writeHead(500);res.end('Unable to load the game.');}
  });
@@ -26,6 +26,7 @@ export function createServer(){
    const msg=JSON.parse(raw);if(!msg||typeof msg!=='object')return;
    if(msg.type==='ping'){send(ws,{type:'pong',sent:msg.sent,serverTime:Date.now()});return;}
    if(msg.type==='join'){
+    if(msg.version!==2){error('Game updated. Refresh this page to load the new rules.');return;}
     if(room){error('Already in a room.');return;}
     const code=String(msg.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
     if(code.length>8){error('Invalid room code.');return;}
@@ -43,7 +44,8 @@ export function createServer(){
   ws.on('close',()=>{sockets.delete(ws);if(room&&room.clients[seat]===ws){room.clients[seat]=null;room.game.connection(seat,false);broadcast(room);}});
   ws.on('error',()=>{});
  });
- const simulation=setInterval(()=>{for(const room of rooms.values()){room.game.step();room.game.finishIfNeeded();if(room.game.practice&&room.game.phase==='final')room.game.players[1].ready=true;for(const item of room.queue||[]){if(room.clients[item.seat]!==item.ws)continue;const result=room.game.command(item.seat,item.msg);if(result)send(item.ws,{type:'error',message:result});}room.queue=[];broadcast(room);}},RULES.tick);
+ let frame=0;
+ const simulation=setInterval(()=>{frame++;for(const room of rooms.values()){const before=room.game.phase;const busy=['countdown','live'].includes(before)||room.game.pending.length>0||room.queue?.length;room.game.step();room.game.finishIfNeeded();if(room.game.practice&&room.game.phase==='final')room.game.players[1].ready=true;for(const item of room.queue||[]){if(room.clients[item.seat]!==item.ws)continue;const result=room.game.command(item.seat,item.msg);if(result)send(item.ws,{type:'error',message:result});}room.queue=[];if(busy||before!==room.game.phase||frame%20===0)broadcast(room);}},RULES.tick);
  const heartbeat=setInterval(()=>{for(const ws of sockets){if(!ws.alive){ws.terminate();continue;}ws.alive=false;ws.ping();}for(const [code,room]of rooms){if(Date.now()-room.created>RULES.roomExpiry){for(const ws of room.clients){send(ws,{type:'expired'});ws?.close(4002,'Room expired');}rooms.delete(code);}}for(const [ip,l]of limits)if(Date.now()-l.at>3600000)limits.delete(ip);},10000);
  const close=()=>{clearInterval(simulation);clearInterval(heartbeat);for(const ws of sockets)ws.terminate();wss.close();return new Promise(resolve=>server.close(resolve));};
  return {server,rooms,close};

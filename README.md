@@ -1,14 +1,14 @@
 # Smite Showdown
 
-An original two-player browser arena with a Node.js authoritative WebSocket server. Original SVG character artwork; no Riot assets or APIs.
-
 Play: https://smiteshowdown.onrender.com
 
 Source: https://github.com/dwmiquella/smiteshowdown
 
-## Run
+Original two-player fantasy arena, with an authoritative Node.js/WebSocket server. Seven rounds, one monster each. Create a room, share its link or code, and both ready up. Desktop keys and large touch buttons are provided. The How to Play dialog explains all rules; solo practice uses the same engine with an inert rival.
 
-Node.js 22 or newer:
+## Run and deploy
+
+Node.js 22+:
 
 ```sh
 npm ci
@@ -16,49 +16,57 @@ npm test
 npm start
 ```
 
-Open http://localhost:3000 for local development. To test locally on another device, use the host's LAN address and allow port 3000 through its firewall. A local URL is not a public deployment. `PORT` defaults to 3000 and binds to `0.0.0.0`.
+Local development: http://localhost:3000. `PORT` is supported; the server binds `0.0.0.0`. Localhost is not proof of remote multiplayer.
 
-## Deploy to Render
+Render: Node web service from `main`, build `npm ci --omit=dev`, start `npm start`, health check `/health`, one free instance. No secrets, database, or custom domain required. `render.yaml` contains the equivalent standalone configuration. The dashboard creation flow worked after the connector initially requested billing setup. Git pushes auto-deploy. Free instances may cold-start after inactivity.
 
-Use one Node web service and one instance. Standalone repository: build `npm ci --omit=dev`, start `npm start`, health check `/health`. `render.yaml` supplies the equivalent free-plan Blueprint. No secrets are required.
+Rooms are in process memory and expire after two hours. A server restart or deployment clears rooms; refresh and create a new room after updating. Do not scale horizontally without shared room routing and state. Versions of the old client are rejected with a refresh message.
 
-The source repository is `dwmiquella/smiteshowdown`, with these files at the repository root. Use build `npm ci --omit=dev` and start `npm start`.
+## Version 2 rules
 
-Render provides HTTPS and WebSocket upgrades on the service URL. Share that URL, create a room, and send the invitation to the second player. Hosting may cold-start after idle periods on the free plan. Rooms live in process memory: restarts or redeployments clear them. This is a single-instance prototype; do not horizontally scale without a room routing/state design. Rooms expire after two hours, including occupied rooms. This is stated in the tutorial.
+All tuning numbers live in `RULES` in `game.js`.
 
-## Play
+| Action | Key | Effect | Cost | Timing |
+|---|---|---|---|---|
+| Auto attack | A | 100 damage on the fixed 500 ms cadence | Free | Starts off each round |
+| Smite | S | 600 in round 1, +100 each round, 1,200 in round 7 | Free | 200 ms cast; once per round |
+| Burst | B | 250 damage | 1 energy | 400 ms windup; once per round |
+| Disrupt | D | Stun rival for 600 ms | 1 energy | 300 ms windup; once per round |
 
-Enter a name and create a private room. The other player opens its link or enters the eight-character code. Both ready up before each round. Keyboard: A toggles auto attacks, S casts Smite, E casts Empowered Smite, B casts Burst. All four have large touch controls. “How to play” contains the complete rules, and solo practice uses the same authoritative engine with an inert second seat, clearly labeled as practice.
+Monsters have 10,000 HP. After a three-second countdown, arena damage deals 200 every second. Start with **3 energy**; recover **1** at the start of rounds 2–7, capped at **6**. Repeated ready requests cannot grant energy. A rematch resets to 3 energy, zero points, and round-1 Smite. Empowered Smite is removed.
 
-Seven rounds, 10,000 HP per monster. Arena damage: 200 each second. Auto attack starts disabled: 100 every 500 ms on a fixed round-relative cadence. Smite: 600 after 200 ms, or Empowered Smite: 850 after 200 ms for two energy. Both share one use per round. Burst: 250 after 400 ms, one energy, once per round. Start each match with six energy and never regenerate it. Energy persists across rounds; rematches reset everything.
+### One winning hit
 
-## Authority, timing, privacy
+Damage is sequential, never shared. Due spells resolve by scheduled impact tick, then monotonic server acceptance order. If two Smites land in the same tick and the first kills, only its caster gets one point. If it is nonlethal, the second can earn the kill. Client timestamps never influence ordering. Earlier button presses on slower connections are not guaranteed to arrive first.
 
-All tuning values are in `RULES` in `game.js`. The engine advances in 50 ms steps. Input intentions are queued and processed at the next simulation boundary, after that tick's impacts. Casts are scheduled for 4 or 8 subsequent ticks. Submission therefore includes up to one tick of input quantization plus network latency. Client timestamps never schedule damage. Under server load, simulation may run slower than wall time; it does not catch up with compressed damage ticks. Countdown/cast rendering extrapolates at most two ticks from the server's simulation time. Pauses freeze simulation, while the reconnect deadline uses server wall time.
+Within a 50 ms simulation tick, due spells resolve first, arena damage second, auto attacks last. Auto-attack tie order alternates by round (host first in odd rounds, guest first in even rounds), shown in the arena. Arena kills award no points. At most one point is awarded for each monster. After seven rounds the higher score wins; an equal score draws.
 
-At each live tick, all due casts, arena damage, and fixed-cadence auto attacks form one damage batch. If lethal, every player who contributed damage in that batch gets one point, including an auto attack contribution. Arena-only kills award none. This can award both players a point, so a drawn match is possible. Final HP is clamped to zero. Recaps report batch HP rather than inventing an order within a batch.
+### Stun and commitment
 
-Energy is reserved immediately when an action is accepted, as is action availability. Each player sees their own true balance and the opponent's revealed balance. Opponent snapshots contain only a generic Smite windup, no empowered flag, damage, or reserved cost. Costs reveal at impact. Already committed casts that finish after death still resolve at their scheduled time, reveal spending, and deal zero damage; ready-up waits for them to settle. No cancel action exists.
+Disrupt has a visible windup and stun status/countdown. While stunned, all new actions are rejected and auto attacks skip their scheduled hits; missed attacks do not accumulate. Stun expiration is inclusive: actions are allowed exactly at its expiry tick. Enabled auto attacks resume on their original cadence.
 
-Every client action has a strictly increasing safe-integer sequence per seat. Duplicate and stale intentions are rejected. Action types, phase, availability, energy, and connection are checked server-side. Maximum WebSocket payload is 2 KB; messages and room creation are rate limited. WebSocket origins must match the host when supplied. Clients have no endpoint for HP, scores, clock changes, or victory claims other than a validated disconnect forfeit.
+Already committed abilities still land through stun, including Disrupt. This preserves the original no-cancellation rule and lets a player respond during its 300 ms telegraph. Two already committed Disrupts can stun both players. A disconnect freezes casts, damage, and stun timers. A monster kill clears stuns. Later committed spells still resolve, reveal their reserved costs, and fizzle without damage or debuffs. Ready-up waits for those casts to settle.
 
-The room link grants access to an empty seat, not to an occupied seat. A random 256-bit reconnect token is kept in sessionStorage (not the share link). Refresh the original tab to recover the seat; another connection with the same token replaces the older socket. A third player cannot occupy a full room. Disconnect detection uses socket close plus a 10-second heartbeat; after detection, play pauses. After 30 seconds the connected player can claim a forfeit. If both return first, play resumes. Leaving voluntarily keeps the seat reserved until expiration.
+### Server validation and reconnects
+
+The server owns HP, resources, phases, order, deadlines, and scoring. Inputs are queued to the next tick, adding up to 50 ms before a cast starts. Under load the simulation can slow rather than compress damage into catch-up ticks. Connections have monotonic action sequences to reject duplicates, action whitelists, phase/energy/availability checks, origin validation, message-size and rate limits. Resource costs reserve immediately and reveal to the opponent at impact; clients never submit damage.
+
+Each occupied seat has a random 256-bit reconnect token in that tab's sessionStorage. The room link does not contain it. Refresh the same tab to resume; a third player cannot take an occupied seat. Socket closure/heartbeat detection pauses active matches. After a 30-second grace period, the remaining connected player can claim a forfeit. Reconnecting both before a claim resumes play.
+
+## Visuals and performance
+
+Three original SVG monsters rotate by round: Hollow Sentinel, Thorn Regent, Astral Manta. Their names, silhouettes, palettes, and arena lighting change while mechanical stats stay identical. Smite impacts flash; reduced-motion preferences disable animations. The HP threshold and damage label track Smite evolution. Controls and recaps show Disrupt, regeneration, and single-hit results.
+
+SVGs are small local assets with no external art dependencies. Live snapshots carry only the last 12 events; full round history is sent for recaps. Idle rooms send one update per second, active play retains 50 ms snapshots. Unchanged player panels and round markers are not rebuilt, and completed rounds stop advancing their simulation clock.
+
+## Strategy and balance
+
+Smite growth creates larger late-round finishing windows without forcing energy spending. Burst converts energy into a finishing combo; Disrupt trades direct damage for a short denial window. Its windup exceeds Smite's cast time, so an alert rival can commit before the stun lands. One regenerated energy per round preserves a budget: repeatedly buying both spells drains reserves. An initial +2 proposal was reduced because it would fully replenish both paid spells every round.
+
+The old guaranteed shared-point incentive for auto-attacking lethal ticks is gone. Automatic tie priority remains a disclosed deterministic rule, not perfect fairness; seven odd rounds give the host four priority rounds and guest three. Timing spells away from automatic ticks or changing attack cadence can overcome that preference. Human playtesting remains necessary; no dominant strategy or equilibrium is claimed.
+
+Optional random-event modes, avatar customization, and selectable cosmetics are not included in this update. The core duel stays deterministic; all original non-conflicting room, reconnect, seven-round, tutorial, and practice requirements remain.
 
 ## Verification
 
-`npm test` runs engine checks and a real WebSocket integration check. Coverage includes exact cast durations, overlapping abilities, shared Smite availability, immediate energy reservation, hidden network projections, fixed attack cadence, duplicate rejection, lethal batch scoring, environment kills, post-death casts, disconnect pause, forfeit grace, seven-round scoring, and rematch reset. The integration check uses separate sockets to create/join, reject a third seat, verify hidden spending, and restore a disconnected seat. Unit tests advance simulation directly; production exposes no such control.
-
-See `VERIFICATION.md` for the browser acceptance result and deployment verification. No simulated opponent is used as evidence of remote multiplayer.
-
-## Strategy and balance observations
-
-- Act or wait: an early Smite is permanently consumed. Waiting preserves the finishing threat but can lose to an earlier empowered commitment.
-- Spend or save: six energy buys three empowerments, six Bursts, or mixed combinations. A synchronized Burst + Empowered Smite does 1,100 damage for three energy, using half the match budget in one round.
-- Cooperate or defect: auto attacks shorten the round but move both players toward their finishing windows. Stopping can invalidate a rival's prediction; toggling cannot generate extra attacks.
-- Hidden commitment: both Smites have the same visible 200 ms cast. The opponent cannot infer the version from the displayed energy until impact, although prior revealed spending constrains the possibilities.
-- Opponent modeling: recaps expose early casts, energy expenditure, attack stops, and lethal batches. Repeated habits can inform later rounds.
-- Obvious incentive to watch: because an auto attack in a lethal batch earns a point, keeping attacks on at a predicted lethal attack tick can secure a shared point cheaply. It does not guarantee a point on non-attack ticks. This reduces the exclusivity of Smite timing and may favor draws.
-- A correctly aligned 1,100-damage combo beats a 600-damage window, but it costs three energy, has a visible 400 ms setup, and requires timing. No universal dominant strategy or equilibrium is claimed. A player can move the HP trajectory by stopping attacks. No random damage or critical hits are used.
-- In the final round, leftover energy has no future value. Spending it when it increases the chance of a needed point has less opportunity cost, but unnecessary early damage can still hand the kill to the rival.
-
-Numbers are prototype values. Human playtesting and latency-diverse testing remain necessary for balance claims.
+`npm test` covers server rules and real independent WebSocket clients. See [VERIFICATION.md](VERIFICATION.md) for observed checks and browser limitations.
